@@ -26,3 +26,5 @@ class Settings(BaseSettings):
 # Single shared instance — import this everywhere instead of
 # instantiating Settings() again, so config is loaded only once.
 settings = Settings()
+
+gemini_model: str = "gemini-flash-latest"

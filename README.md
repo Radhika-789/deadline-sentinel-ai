@@ -19,4 +19,4 @@ students before they miss out.
 4. Run instructions will be added as we build each service.
 
 ## Status
-🚧 Under active development — built step by step as a learning + portfolio project.
+ Under active development 
