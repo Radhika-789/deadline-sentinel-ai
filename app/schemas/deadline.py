@@ -151,3 +151,10 @@ class DeadlineEntryUpdate(BaseModel):
     is_deleted: bool | None = None
 
     model_config = ConfigDict(str_strip_whitespace=True)
+
+class ExtractionRequest(BaseModel):
+    """Request body for POST /extract — raw unstructured text input."""
+
+    text: str = Field(..., min_length=10, max_length=20_000)
+
+    model_config = ConfigDict(str_strip_whitespace=True)
