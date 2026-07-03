@@ -5,7 +5,6 @@ import streamlit as st
 
 from api import get_deadlines, get_health
 
-
 st.set_page_config(
     page_title="Deadline Sentinel AI",
     page_icon="📅",
@@ -16,7 +15,8 @@ st.title("📅 Deadline Sentinel AI")
 st.caption("AI-powered placement & opportunity tracker")
 
 
-# SIDEBAR
+# Sidebar
+
 
 with st.sidebar:
 
@@ -31,34 +31,124 @@ with st.sidebar:
 
     st.divider()
 
+    st.subheader("Filters")
+
+    company_name = st.text_input(
+        "Company Name",
+        placeholder="e.g. Microsoft",
+    )
+
+    category = st.selectbox(
+        "Category",
+        [
+            "",
+            "placement",
+            "internship",
+            "hackathon",
+            "scholarship",
+            "competition",
+            "other",
+        ],
+    )
+
+    status = st.selectbox(
+        "Status",
+        [
+            "",
+            "upcoming",
+            "completed",
+            "expired",
+        ],
+    )
+
+    deadline_from = st.date_input(
+        "Deadline From",
+        value=None,
+    )
+
+    deadline_to = st.date_input(
+        "Deadline To",
+        value=None,
+    )
+
+    
+
+    st.divider()
+
+    sort_by = st.selectbox(
+        "Sort By",
+        [
+            "deadline",
+            "company_name",
+            "created_at",
+        ],
+    )
+
+    order = st.radio(
+        "Order",
+        [
+            "asc",
+            "desc",
+        ],
+        horizontal=True,
+    )
+
+    limit = st.selectbox(
+        "Results Per Page",
+        [
+            10,
+            20,
+            50,
+        ],
+        index=1,
+    )
+
+    st.divider()
+
     if st.button("🔄 Refresh Dashboard"):
         st.rerun()
 
-# FETCH
+
+# Fetch Data
+
 
 with st.spinner("Loading deadlines..."):
 
     try:
-        deadlines = get_deadlines()
+
+        deadlines = get_deadlines(
+            company_name=company_name or None,
+            category=category or None,
+            status=status or None,
+            deadline_from=deadline_from,
+            deadline_to=deadline_to,
+            skip=0,
+            limit=limit,
+            sort_by=sort_by,
+            order=order,
+        )
 
     except Exception as e:
+
         st.error(f"Could not connect to backend.\n\n{e}")
+
         st.stop()
 
-# EMPTY STATE
+
+# Empty State
+
 
 if not deadlines:
 
-    st.info("No deadlines found.")
+    st.info("📭 No deadlines matched your filters.")
 
     st.stop()
 
 
+# DataFrame
 
 
 df = pd.DataFrame(deadlines)
-
-
 
 
 def days_remaining(deadline):
@@ -99,7 +189,22 @@ completed = (
 total = len(df)
 
 
+# Metrics
+
+
+st.divider()
+st.subheader("Dashboard Overview")
+
 col1, col2, col3, col4 = st.columns(4)
+
+col1.metric("Total Deadlines", total)
+col2.metric("Upcoming", upcoming)
+col3.metric("Completed", completed)
+col4.metric("Expired", expired)
+
+
+# Table
+
 
 st.divider()
 st.subheader("All Deadlines")
@@ -137,8 +242,3 @@ st.dataframe(
     use_container_width=True,
     hide_index=True,
 )
-
-col1.metric("Total Deadlines", total)
-col2.metric("Upcoming", upcoming)
-col3.metric("Completed", completed)
-col4.metric("Expired", expired)
