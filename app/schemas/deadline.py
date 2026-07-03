@@ -129,6 +129,7 @@ class DeadlineEntryResponse(BaseModel):
     is_deleted: bool
     created_at: datetime
     updated_at: datetime
+    is_updated: bool = False
 
     # Lets this schema be built directly from a SQLAlchemy ORM object
     # (e.g. DeadlineEntryResponse.model_validate(db_entry)) instead of

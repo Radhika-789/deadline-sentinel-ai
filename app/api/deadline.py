@@ -55,7 +55,7 @@ async def extract_deadline(
 ) -> DeadlineEntryResponse:
     """
     Extract structured deadline information from raw text using Gemini
-    and persist it to the database.
+    and persist it to the database. If a duplicate exists, update it.
     """
 
     logger.info("Extraction request received (%d chars).", len(payload.text))
@@ -67,6 +67,34 @@ async def extract_deadline(
         extracted.company_name,
         extracted.category,
     )
+
+    # Search for an existing non-deleted entry with same company_name, role, and deadline
+    query = db.query(DeadlineEntry).filter(
+        DeadlineEntry.company_name == extracted.company_name,
+        DeadlineEntry.deadline == extracted.deadline,
+        DeadlineEntry.is_deleted.is_(False)
+    )
+    if extracted.role is None:
+        query = query.filter(DeadlineEntry.role.is_(None))
+    else:
+        query = query.filter(DeadlineEntry.role == extracted.role)
+    existing = query.first()
+
+    if existing:
+        logger.info("Duplicate found (id=%d). Updating existing entry.", existing.id)
+        # Update editable fields
+        for field, val in extracted.model_dump(exclude_unset=True).items():
+            setattr(existing, field, val)
+        existing.source_type = SourceType.TEXT
+        existing.raw_text = payload.text
+        existing.updated_at = datetime.utcnow()
+        
+        db.commit()
+        db.refresh(existing)
+        
+        resp = DeadlineEntryResponse.model_validate(existing)
+        resp.is_updated = True
+        return resp
 
     entry_data = DeadlineEntryCreate(
         **extracted.model_dump(),
@@ -81,12 +109,14 @@ async def extract_deadline(
     db.refresh(entry)
 
     logger.info(
-        "Persisted deadline entry id=%d company=%s",
+        "Persisted new deadline entry id=%d company=%s",
         entry.id,
         entry.company_name,
     )
 
-    return DeadlineEntryResponse.model_validate(entry)
+    resp = DeadlineEntryResponse.model_validate(entry)
+    resp.is_updated = False
+    return resp
 
 
 @router.post("/upload", response_model=DeadlineEntryResponse)
@@ -98,7 +128,7 @@ async def upload_file(
 ) -> DeadlineEntryResponse:
     """
     Upload a file (PDF, DOCX, TXT, PNG, JPG, JPEG), extract text,
-    run Gemini extraction, and save the deadline entry.
+    run Gemini extraction, and save the deadline entry. If a duplicate exists, update it.
     """
     logger.info("Upload request received: filename=%s, content_type=%s", file.filename, file.content_type)
 
@@ -158,6 +188,34 @@ async def upload_file(
         extracted.category,
     )
 
+    # Search for an existing non-deleted entry with same company_name, role, and deadline
+    query = db.query(DeadlineEntry).filter(
+        DeadlineEntry.company_name == extracted.company_name,
+        DeadlineEntry.deadline == extracted.deadline,
+        DeadlineEntry.is_deleted.is_(False)
+    )
+    if extracted.role is None:
+        query = query.filter(DeadlineEntry.role.is_(None))
+    else:
+        query = query.filter(DeadlineEntry.role == extracted.role)
+    existing = query.first()
+
+    if existing:
+        logger.info("Duplicate found (id=%d). Updating existing entry from upload.", existing.id)
+        # Update editable fields
+        for field, val in extracted.model_dump(exclude_unset=True).items():
+            setattr(existing, field, val)
+        existing.source_type = source_type
+        existing.raw_text = raw_text
+        existing.updated_at = datetime.utcnow()
+        
+        db.commit()
+        db.refresh(existing)
+        
+        resp = DeadlineEntryResponse.model_validate(existing)
+        resp.is_updated = True
+        return resp
+
     # Create and persist DeadlineEntry
     entry_data = DeadlineEntryCreate(
         **extracted.model_dump(),
@@ -172,13 +230,15 @@ async def upload_file(
     db.refresh(entry)
 
     logger.info(
-        "Persisted deadline entry from upload: id=%d company=%s filename=%s",
+        "Persisted new deadline entry from upload: id=%d company=%s filename=%s",
         entry.id,
         entry.company_name,
         filename,
     )
 
-    return DeadlineEntryResponse.model_validate(entry)
+    resp = DeadlineEntryResponse.model_validate(entry)
+    resp.is_updated = False
+    return resp
 
 
 # List Deadlines
