@@ -10,7 +10,7 @@ import logging
 from datetime import datetime
 from typing import List, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -26,6 +26,7 @@ from app.schemas.deadline import (
     DeadlineEntryUpdate,
     ExtractionRequest,
 )
+from app.services.file_extraction import FileExtractionService, FileExtractionError
 from app.services.gemini_extraction import GeminiExtractionService
 
 logger = logging.getLogger(__name__)
@@ -37,6 +38,10 @@ def get_extraction_service() -> GeminiExtractionService:
     """Dependency provider for GeminiExtractionService."""
     return GeminiExtractionService()
 
+
+def get_file_extraction_service() -> FileExtractionService:
+    """Dependency provider for FileExtractionService."""
+    return FileExtractionService()
 
 
 # Extract + Save
@@ -79,6 +84,98 @@ async def extract_deadline(
         "Persisted deadline entry id=%d company=%s",
         entry.id,
         entry.company_name,
+    )
+
+    return DeadlineEntryResponse.model_validate(entry)
+
+
+@router.post("/upload", response_model=DeadlineEntryResponse)
+async def upload_file(
+    file: UploadFile = File(...),
+    file_service: FileExtractionService = Depends(get_file_extraction_service),
+    gemini_service: GeminiExtractionService = Depends(get_extraction_service),
+    db: Session = Depends(get_db),
+) -> DeadlineEntryResponse:
+    """
+    Upload a file (PDF, DOCX, TXT, PNG, JPG, JPEG), extract text,
+    run Gemini extraction, and save the deadline entry.
+    """
+    logger.info("Upload request received: filename=%s, content_type=%s", file.filename, file.content_type)
+
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Empty filename.")
+
+    filename = file.filename
+    ext = filename.lower().split(".")[-1]
+
+    # Validate file type
+    supported_extensions = {"pdf", "docx", "txt", "png", "jpg", "jpeg"}
+    if ext not in supported_extensions:
+        logger.warning("Rejected unsupported file type: %s", filename)
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file extension: .{ext}. Supported types: {', '.join(supported_extensions)}"
+        )
+
+    # Read bytes and check for empty files
+    file_bytes = await file.read()
+    if not file_bytes:
+        logger.warning("Rejected empty file: %s", filename)
+        raise HTTPException(
+            status_code=400,
+            detail="The uploaded file is empty."
+        )
+
+    # Log file upload event
+    logger.info("Processing file upload: %s (%d bytes)", filename, len(file_bytes))
+
+    # Extract text based on file type
+    try:
+        if ext == "pdf":
+            raw_text = file_service.extract_pdf(file_bytes)
+            source_type = SourceType.PDF
+        elif ext == "docx":
+            raw_text = file_service.extract_docx(file_bytes)
+            source_type = SourceType.TEXT
+        elif ext == "txt":
+            raw_text = file_service.extract_txt(file_bytes)
+            source_type = SourceType.TEXT
+        else: # png, jpg, jpeg
+            raw_text = file_service.extract_image(file_bytes)
+            source_type = SourceType.IMAGE
+    except FileExtractionError as exc:
+        logger.error("File text extraction failed for %s: %s", filename, exc)
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    # Process with Gemini
+    logger.info("Passing extracted text from %s to GeminiExtractionService", filename)
+    extracted = gemini_service.extract_from_text(raw_text)
+
+    logger.info(
+        "Gemini extraction succeeded for %s: company=%s category=%s",
+        filename,
+        extracted.company_name,
+        extracted.category,
+    )
+
+    # Create and persist DeadlineEntry
+    entry_data = DeadlineEntryCreate(
+        **extracted.model_dump(),
+        source_type=source_type,
+        raw_text=raw_text,
+    )
+
+    entry = DeadlineEntry(**entry_data.model_dump())
+
+    db.add(entry)
+    db.commit()
+    db.refresh(entry)
+
+    logger.info(
+        "Persisted deadline entry from upload: id=%d company=%s filename=%s",
+        entry.id,
+        entry.company_name,
+        filename,
     )
 
     return DeadlineEntryResponse.model_validate(entry)

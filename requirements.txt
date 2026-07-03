@@ -7,3 +7,6 @@ sqlalchemy==2.0.35
 streamlit==1.38.0
 apscheduler==3.10.4
 google-generativeai==0.8.3
+pdfplumber>=0.11.0
+python-multipart>=0.0.9
+Pillow>=10.3.0

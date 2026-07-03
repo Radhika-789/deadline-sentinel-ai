@@ -59,3 +59,13 @@ def get_deadlines(
     response.raise_for_status()
 
     return response.json()
+
+
+def upload_file(file):
+    """
+    Upload a file to the FastAPI backend.
+    """
+    files = {"file": (file.name, file.getvalue(), file.type)}
+    response = requests.post(f"{BASE_URL}/upload", files=files, timeout=30)
+    response.raise_for_status()
+    return response.json()
