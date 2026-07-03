@@ -137,20 +137,17 @@ class DeadlineEntryResponse(BaseModel):
 
 
 class DeadlineEntryUpdate(BaseModel):
-    """
-    Partial-update schema for future edit endpoints (e.g. user
-    corrects a misread CGPA or marks status as APPLIED). Every field
-    is optional since PATCH-style updates only send changed fields.
-    """
-
-    role: str | None = Field(default=None, max_length=255)
-    cgpa_criteria: str | None = Field(default=None, max_length=100)
+    company_name: str | None = None
+    role: str | None = None
+    eligible_branches: str | None = None
+    cgpa_criteria: str | None = None
     deadline: datetime | None = None
-    registration_link: str | None = Field(default=None, max_length=1000)
+    registration_link: str | None = None
+    important_instructions: str | None = None
+    category: OpportunityCategory | None = None
     status: DeadlineStatus | None = None
-    is_deleted: bool | None = None
 
-    model_config = ConfigDict(str_strip_whitespace=True)
+    model_config = ConfigDict(extra="forbid")
 
 class ExtractionRequest(BaseModel):
     """Request body for POST /extract — raw unstructured text input."""
