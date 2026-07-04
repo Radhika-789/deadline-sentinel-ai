@@ -7,10 +7,13 @@ Session directly for persistence.
 """
 
 import logging
-from datetime import datetime
+import re
+from datetime import datetime , timedelta, timezone
+from io import BytesIO
 from typing import List, Literal
+from icalendar import Calendar, Event
 
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException , Response ,Query, UploadFile, File
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -332,7 +335,80 @@ async def get_deadline(
 
     return entry
 
+# Export as .ics
 
+
+def _ics_slug(value: str) -> str:
+    """Turn a company/role name into a safe filename fragment."""
+    value = re.sub(r"[^\w\s-]", "", value).strip().lower()
+    return re.sub(r"\s+", "-", value) or "unknown"
+
+
+@router.get("/deadlines/{deadline_id}/calendar")
+async def get_deadline_calendar(
+    deadline_id: int,
+    db: Session = Depends(get_db),
+) -> Response:
+    """
+    Generate a standards-compliant .ics file for a single deadline,
+    entirely in memory, and return it as a downloadable attachment.
+    """
+    entry = (
+        db.query(DeadlineEntry)
+        .filter(
+            DeadlineEntry.id == deadline_id,
+            DeadlineEntry.is_deleted.is_(False),
+        )
+        .first()
+    )
+
+    if entry is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Deadline {deadline_id} not found.",
+        )
+
+    role_part = entry.role or "Opportunity"
+    summary = f"{entry.company_name} - {role_part}"
+
+    description = "\n".join(
+        [
+            f"Category: {entry.category.value}",
+            f"Eligibility: {entry.eligible_branches or 'N/A'}"
+            + (f" (CGPA: {entry.cgpa_criteria})" if entry.cgpa_criteria else ""),
+            f"Application Link: {entry.registration_link or 'N/A'}",
+            f"Notes: {entry.important_instructions or 'N/A'}",
+        ]
+    )
+
+    # Normalize to UTC regardless of whether the stored value is naive or aware.
+    start = entry.deadline
+    start = start.replace(tzinfo=timezone.utc) if start.tzinfo is None else start.astimezone(timezone.utc)
+    end = start + timedelta(hours=1)
+
+    cal = Calendar()
+    cal.add("prodid", "-//Deadline Sentinel AI//calendar-export//EN")
+    cal.add("version", "2.0")
+
+    event = Event()
+    event.add("uid", f"deadline-{entry.id}@deadline-sentinel-ai")
+    event.add("summary", summary)
+    event.add("description", description)
+    event.add("dtstart", start)
+    event.add("dtend", end)
+    event.add("dtstamp", datetime.now(timezone.utc))
+    event.add("location", "")
+
+    cal.add_component(event)
+
+    ics_bytes = cal.to_ical()
+    filename = f"{_ics_slug(entry.company_name)}-{_ics_slug(role_part)}.ics"
+
+    return Response(
+        content=BytesIO(ics_bytes).getvalue(),
+        media_type="text/calendar",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 # Update Deadline
 

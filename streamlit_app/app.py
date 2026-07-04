@@ -3,8 +3,9 @@ from datetime import datetime
 import pandas as pd
 import streamlit as st
 import plotly.express as px
+import requests
 
-from api import get_deadlines, get_health, upload_file
+from api import get_deadlines, get_health, upload_file, get_deadline_calendar
 
 # Initialize session state for notifications
 if "upload_success" not in st.session_state:
@@ -404,6 +405,9 @@ st.subheader("📋 All Filtered Deadlines")
 # Format deadline column for display
 df_display = df.copy()
 df_display["deadline_str"] = df_display["deadline_dt"].dt.strftime("%d %b %Y")
+# NOTE: df_display intentionally keeps all original columns, including
+# "id" — Section 8 (calendar export) depends on it. Only narrow into a
+# *new* variable (display_df) for the table view; never reassign df_display.
 
 display_df = df_display[
     [
@@ -445,3 +449,50 @@ st.dataframe(
     use_container_width=True,
     hide_index=True,
 )
+
+# --- SECTION 8: Calendar Export ---
+st.divider()
+with st.expander("📅 Add to Calendar", expanded=False):
+    st.caption("Generate and download a calendar (.ics) file for any listed deadline.")
+
+    calendar_rows = df_display.head(limit)
+
+    if calendar_rows.empty:
+        st.info("No deadlines available to export.")
+    else:
+        header_cols = st.columns([3, 2, 2, 2])
+        header_cols[0].markdown("**Company**")
+        header_cols[1].markdown("**Role**")
+        header_cols[2].markdown("**Deadline**")
+        header_cols[3].markdown("**Action**")
+
+        for _, row in calendar_rows.iterrows():
+            row_id = row["id"]
+            cache_key = f"ics_file_{row_id}"
+
+            cols = st.columns([3, 2, 2, 2])
+            cols[0].write(row["company_name"])
+            cols[1].write(row["role"] or "N/A")
+            cols[2].write(row["deadline_str"])
+
+            if cols[3].button("📆 Generate .ics", key=f"cal_btn_{row_id}"):
+                try:
+                    ics_bytes, filename = get_deadline_calendar(row_id)
+                    st.session_state[cache_key] = (ics_bytes, filename)
+                except requests.exceptions.HTTPError as e:
+                    if e.response is not None and e.response.status_code == 404:
+                        st.error(f"'{row['company_name']}' deadline no longer exists.")
+                    else:
+                        st.error(f"Failed to generate calendar file for '{row['company_name']}'.")
+                except requests.RequestException:
+                    st.error("Could not reach backend to generate calendar file.")
+
+            if cache_key in st.session_state:
+                ics_bytes, filename = st.session_state[cache_key]
+                cols[3].download_button(
+                    "⬇️ Download Calendar (.ics)",
+                    data=ics_bytes,
+                    file_name=filename,
+                    mime="text/calendar",
+                    key=f"cal_dl_{row_id}",
+                )

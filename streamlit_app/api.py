@@ -69,3 +69,22 @@ def upload_file(file):
     response = requests.post(f"{BASE_URL}/upload", files=files, timeout=30)
     response.raise_for_status()
     return response.json()
+
+def get_deadline_calendar(deadline_id):
+    """
+    Download the .ics calendar file for a single deadline from the
+    FastAPI backend. Returns the raw file bytes plus the filename
+    suggested by the backend's Content-Disposition header.
+    """
+    response = requests.get(
+        f"{BASE_URL}/deadlines/{deadline_id}/calendar",
+        timeout=20,
+    )
+    response.raise_for_status()
+
+    filename = f"deadline_{deadline_id}.ics"
+    content_disposition = response.headers.get("Content-Disposition", "")
+    if "filename=" in content_disposition:
+        filename = content_disposition.split("filename=")[-1].strip('"; ')
+
+    return response.content, filename
