@@ -29,6 +29,38 @@ class DeadlineService:
         self.file_service = FileExtractionService()
         self.gemini_service = GeminiExtractionService()
 
+    def _auto_expire_deadlines(
+        self, db: Session, user_id: int, deadline_id: int | None = None
+    ) -> None:
+        """
+        Flip any past-due, still-"upcoming" deadlines to "expired".
+
+        Only touches rows whose status is currently UPCOMING — deadlines
+        the user (or another process) has already moved to APPLIED or any
+        other status are left untouched. Scoped to `user_id` so this never
+        crosses tenant boundaries; optionally narrowed to a single
+        `deadline_id` when only one entry is being read. Commits only if
+        at least one row actually changed.
+        """
+        now = datetime.utcnow()
+        query = db.query(DeadlineEntry).filter(
+            DeadlineEntry.user_id == user_id,
+            DeadlineEntry.is_deleted.is_(False),
+            DeadlineEntry.status == DeadlineStatus.UPCOMING,
+            DeadlineEntry.deadline < now,
+        )
+        if deadline_id is not None:
+            query = query.filter(DeadlineEntry.id == deadline_id)
+
+        stale_entries = query.all()
+        if not stale_entries:
+            return
+
+        for entry in stale_entries:
+            entry.status = DeadlineStatus.EXPIRED
+
+        db.commit()
+
     def list_deadlines(
         self,
         db: Session,
@@ -44,6 +76,11 @@ class DeadlineService:
         order: str = "asc",
     ) -> List[DeadlineEntry]:
         """List deadlines belonging to a user with filtering, sorting, and pagination."""
+        # Bring statuses up to date before filtering/sorting so an
+        # "upcoming" filter never returns a deadline that's already
+        # passed, and an "expired" filter/count reflects it immediately.
+        self._auto_expire_deadlines(db, user_id)
+
         query = db.query(DeadlineEntry).filter(
             DeadlineEntry.user_id == user_id,
             DeadlineEntry.is_deleted.is_(False),
@@ -74,6 +111,10 @@ class DeadlineService:
 
     def get_deadline(self, db: Session, deadline_id: int, user_id: int) -> DeadlineEntry:
         """Get a single deadline by ID. Raises 404 if not found or belongs to another user."""
+        # Same up-to-date-status guarantee as list_deadlines, scoped to
+        # just this row since that's all this call needs.
+        self._auto_expire_deadlines(db, user_id, deadline_id=deadline_id)
+
         entry = (
             db.query(DeadlineEntry)
             .filter(
