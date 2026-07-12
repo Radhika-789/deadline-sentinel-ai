@@ -114,6 +114,7 @@ class DeadlineEntryResponse(BaseModel):
     """
 
     id: int
+    user_id: int
     company_name: str
     role: str | None
     eligible_branches: str | None

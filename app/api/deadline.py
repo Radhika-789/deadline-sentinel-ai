@@ -1,139 +1,71 @@
-"""
-API routes for deadline extraction and retrieval.
-
-Routes stay thin by design: parse the request, delegate to
-GeminiExtractionService for AI work, and use the injected SQLAlchemy
-Session directly for persistence.
-"""
-
 import logging
 import re
-from datetime import datetime , timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from typing import List, Literal
 from icalendar import Calendar, Event
 
-from fastapi import APIRouter, Depends, HTTPException , Response ,Query, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, UploadFile, File, status
 from sqlalchemy.orm import Session
 
+from app.api.deps import get_current_user
 from app.db.session import get_db
+from app.models.user import User
 from app.models.deadline import (
-    DeadlineEntry,
     DeadlineStatus,
     OpportunityCategory,
-    SourceType,
 )
 from app.schemas.deadline import (
-    DeadlineEntryCreate,
     DeadlineEntryResponse,
     DeadlineEntryUpdate,
     ExtractionRequest,
 )
-from app.services.file_extraction import FileExtractionService, FileExtractionError
-from app.services.gemini_extraction import GeminiExtractionService
+from app.services.deadline import DeadlineService
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["deadlines"])
 
 
-def get_extraction_service() -> GeminiExtractionService:
-    """Dependency provider for GeminiExtractionService."""
-    return GeminiExtractionService()
-
-
-def get_file_extraction_service() -> FileExtractionService:
-    """Dependency provider for FileExtractionService."""
-    return FileExtractionService()
-
-
-# Extract + Save
+def get_deadline_service() -> DeadlineService:
+    """Dependency provider for DeadlineService."""
+    return DeadlineService()
 
 
 @router.post("/extract", response_model=DeadlineEntryResponse)
-async def extract_deadline(
+def extract_deadline(
     payload: ExtractionRequest,
-    service: GeminiExtractionService = Depends(get_extraction_service),
+    service: DeadlineService = Depends(get_deadline_service),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> DeadlineEntryResponse:
     """
     Extract structured deadline information from raw text using Gemini
-    and persist it to the database. If a duplicate exists, update it.
+    and persist it to the database for the authenticated user.
     """
-
-    logger.info("Extraction request received (%d chars).", len(payload.text))
-
-    extracted = service.extract_from_text(payload.text)
-
-    logger.info(
-        "Extraction succeeded: company=%s category=%s",
-        extracted.company_name,
-        extracted.category,
-    )
-
-    # Search for an existing non-deleted entry with same company_name, role, and deadline
-    query = db.query(DeadlineEntry).filter(
-        DeadlineEntry.company_name == extracted.company_name,
-        DeadlineEntry.deadline == extracted.deadline,
-        DeadlineEntry.is_deleted.is_(False)
-    )
-    if extracted.role is None:
-        query = query.filter(DeadlineEntry.role.is_(None))
-    else:
-        query = query.filter(DeadlineEntry.role == extracted.role)
-    existing = query.first()
-
-    if existing:
-        logger.info("Duplicate found (id=%d). Updating existing entry.", existing.id)
-        # Update editable fields
-        for field, val in extracted.model_dump(exclude_unset=True).items():
-            setattr(existing, field, val)
-        existing.source_type = SourceType.TEXT
-        existing.raw_text = payload.text
-        existing.updated_at = datetime.utcnow()
-        
-        db.commit()
-        db.refresh(existing)
-        
-        resp = DeadlineEntryResponse.model_validate(existing)
-        resp.is_updated = True
-        return resp
-
-    entry_data = DeadlineEntryCreate(
-        **extracted.model_dump(),
-        source_type=SourceType.TEXT,
-        raw_text=payload.text,
-    )
-
-    entry = DeadlineEntry(**entry_data.model_dump())
-
-    db.add(entry)
-    db.commit()
-    db.refresh(entry)
-
-    logger.info(
-        "Persisted new deadline entry id=%d company=%s",
-        entry.id,
-        entry.company_name,
-    )
-
+    entry = service.create_deadline_from_text(db, payload, current_user.id)
     resp = DeadlineEntryResponse.model_validate(entry)
-    resp.is_updated = False
+    resp.is_updated = getattr(entry, "is_updated", False)
     return resp
 
 
 @router.post("/upload", response_model=DeadlineEntryResponse)
 async def upload_file(
     file: UploadFile = File(...),
-    file_service: FileExtractionService = Depends(get_file_extraction_service),
-    gemini_service: GeminiExtractionService = Depends(get_extraction_service),
+    service: DeadlineService = Depends(get_deadline_service),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> DeadlineEntryResponse:
     """
     Upload a file (PDF, DOCX, TXT, PNG, JPG, JPEG), extract text,
-    run Gemini extraction, and save the deadline entry. If a duplicate exists, update it.
+    run Gemini extraction, and save/update the deadline entry for the authenticated user.
     """
-    logger.info("Upload request received: filename=%s, content_type=%s", file.filename, file.content_type)
+    logger.info(
+        "Upload request from user %d: filename=%s, content_type=%s",
+        current_user.id,
+        file.filename,
+        file.content_type,
+    )
 
     if not file.filename:
         raise HTTPException(status_code=400, detail="Empty filename.")
@@ -144,7 +76,7 @@ async def upload_file(
     # Validate file type
     supported_extensions = {"pdf", "docx", "txt", "png", "jpg", "jpeg"}
     if ext not in supported_extensions:
-        logger.warning("Rejected unsupported file type: %s", filename)
+        logger.warning("Rejected unsupported file type from user %d: %s", current_user.id, filename)
         raise HTTPException(
             status_code=400,
             detail=f"Unsupported file extension: .{ext}. Supported types: {', '.join(supported_extensions)}"
@@ -153,102 +85,22 @@ async def upload_file(
     # Read bytes and check for empty files
     file_bytes = await file.read()
     if not file_bytes:
-        logger.warning("Rejected empty file: %s", filename)
+        logger.warning("Rejected empty file from user %d: %s", current_user.id, filename)
         raise HTTPException(
             status_code=400,
             detail="The uploaded file is empty."
         )
 
-    # Log file upload event
-    logger.info("Processing file upload: %s (%d bytes)", filename, len(file_bytes))
-
-    # Extract text based on file type
-    try:
-        if ext == "pdf":
-            raw_text = file_service.extract_pdf(file_bytes)
-            source_type = SourceType.PDF
-        elif ext == "docx":
-            raw_text = file_service.extract_docx(file_bytes)
-            source_type = SourceType.TEXT
-        elif ext == "txt":
-            raw_text = file_service.extract_txt(file_bytes)
-            source_type = SourceType.TEXT
-        else: # png, jpg, jpeg
-            raw_text = file_service.extract_image(file_bytes)
-            source_type = SourceType.IMAGE
-    except FileExtractionError as exc:
-        logger.error("File text extraction failed for %s: %s", filename, exc)
-        raise HTTPException(status_code=400, detail=str(exc))
-
-    # Process with Gemini
-    logger.info("Passing extracted text from %s to GeminiExtractionService", filename)
-    extracted = gemini_service.extract_from_text(raw_text)
-
-    logger.info(
-        "Gemini extraction succeeded for %s: company=%s category=%s",
-        filename,
-        extracted.company_name,
-        extracted.category,
-    )
-
-    # Search for an existing non-deleted entry with same company_name, role, and deadline
-    query = db.query(DeadlineEntry).filter(
-        DeadlineEntry.company_name == extracted.company_name,
-        DeadlineEntry.deadline == extracted.deadline,
-        DeadlineEntry.is_deleted.is_(False)
-    )
-    if extracted.role is None:
-        query = query.filter(DeadlineEntry.role.is_(None))
-    else:
-        query = query.filter(DeadlineEntry.role == extracted.role)
-    existing = query.first()
-
-    if existing:
-        logger.info("Duplicate found (id=%d). Updating existing entry from upload.", existing.id)
-        # Update editable fields
-        for field, val in extracted.model_dump(exclude_unset=True).items():
-            setattr(existing, field, val)
-        existing.source_type = source_type
-        existing.raw_text = raw_text
-        existing.updated_at = datetime.utcnow()
-        
-        db.commit()
-        db.refresh(existing)
-        
-        resp = DeadlineEntryResponse.model_validate(existing)
-        resp.is_updated = True
-        return resp
-
-    # Create and persist DeadlineEntry
-    entry_data = DeadlineEntryCreate(
-        **extracted.model_dump(),
-        source_type=source_type,
-        raw_text=raw_text,
-    )
-
-    entry = DeadlineEntry(**entry_data.model_dump())
-
-    db.add(entry)
-    db.commit()
-    db.refresh(entry)
-
-    logger.info(
-        "Persisted new deadline entry from upload: id=%d company=%s filename=%s",
-        entry.id,
-        entry.company_name,
-        filename,
-    )
-
+    # Process with Service
+    entry = service.process_file_upload(db, filename, file_bytes, current_user.id)
+    
     resp = DeadlineEntryResponse.model_validate(entry)
-    resp.is_updated = False
+    resp.is_updated = getattr(entry, "is_updated", False)
     return resp
 
 
-# List Deadlines
-
-
 @router.get("/deadlines", response_model=List[DeadlineEntryResponse])
-async def list_deadlines(
+def list_deadlines(
     category: OpportunityCategory | None = None,
     status: DeadlineStatus | None = None,
     company_name: str | None = None,
@@ -258,84 +110,39 @@ async def list_deadlines(
     limit: int = Query(default=50, ge=1, le=100),
     sort_by: Literal["deadline", "created_at", "company_name"] = "deadline",
     order: Literal["asc", "desc"] = "asc",
+    service: DeadlineService = Depends(get_deadline_service),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> List[DeadlineEntryResponse]:
     """
-    Return deadlines with optional filtering, sorting and pagination.
+    Return deadlines for the authenticated user with optional filtering, sorting and pagination.
     """
-
-    query = db.query(DeadlineEntry).filter(
-        DeadlineEntry.is_deleted.is_(False)
+    return service.list_deadlines(
+        db=db,
+        user_id=current_user.id,
+        category=category,
+        status_val=status,
+        company_name=company_name,
+        deadline_from=deadline_from,
+        deadline_to=deadline_to,
+        skip=skip,
+        limit=limit,
+        sort_by=sort_by,
+        order=order,
     )
-
-    if category:
-        query = query.filter(DeadlineEntry.category == category)
-
-    if status:
-        query = query.filter(DeadlineEntry.status == status)
-
-    if company_name:
-        query = query.filter(
-            DeadlineEntry.company_name.ilike(f"%{company_name}%")
-        )
-
-    if deadline_from:
-        query = query.filter(
-            DeadlineEntry.deadline >= deadline_from
-        )
-
-    if deadline_to:
-        query = query.filter(
-            DeadlineEntry.deadline <= deadline_to
-        )
-
-    sort_column = getattr(DeadlineEntry, sort_by)
-
-    if order == "desc":
-        query = query.order_by(sort_column.desc())
-    else:
-        query = query.order_by(sort_column.asc())
-
-    entries = (
-        query.offset(skip)
-        .limit(limit)
-        .all()
-    )
-
-    return entries
-
-
-
-# Get Single Deadline
 
 
 @router.get("/deadlines/{deadline_id}", response_model=DeadlineEntryResponse)
-async def get_deadline(
+def get_deadline(
     deadline_id: int,
+    service: DeadlineService = Depends(get_deadline_service),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> DeadlineEntryResponse:
     """
-    Return a single deadline by id.
+    Return a single deadline by id for the authenticated user.
     """
-
-    entry = (
-        db.query(DeadlineEntry)
-        .filter(
-            DeadlineEntry.id == deadline_id,
-            DeadlineEntry.is_deleted.is_(False),
-        )
-        .first()
-    )
-
-    if entry is None:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Deadline {deadline_id} not found.",
-        )
-
-    return entry
-
-# Export as .ics
+    return service.get_deadline(db, deadline_id, current_user.id)
 
 
 def _ics_slug(value: str) -> str:
@@ -345,28 +152,17 @@ def _ics_slug(value: str) -> str:
 
 
 @router.get("/deadlines/{deadline_id}/calendar")
-async def get_deadline_calendar(
+def get_deadline_calendar(
     deadline_id: int,
+    service: DeadlineService = Depends(get_deadline_service),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Response:
     """
-    Generate a standards-compliant .ics file for a single deadline,
+    Generate a standards-compliant .ics file for a single user-owned deadline,
     entirely in memory, and return it as a downloadable attachment.
     """
-    entry = (
-        db.query(DeadlineEntry)
-        .filter(
-            DeadlineEntry.id == deadline_id,
-            DeadlineEntry.is_deleted.is_(False),
-        )
-        .first()
-    )
-
-    if entry is None:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Deadline {deadline_id} not found.",
-        )
+    entry = service.get_deadline(db, deadline_id, current_user.id)
 
     role_part = entry.role or "Opportunity"
     summary = f"{entry.company_name} - {role_part}"
@@ -410,83 +206,30 @@ async def get_deadline_calendar(
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
-# Update Deadline
-
 
 @router.patch("/deadlines/{deadline_id}", response_model=DeadlineEntryResponse)
-async def update_deadline(
+def update_deadline(
     deadline_id: int,
     payload: DeadlineEntryUpdate,
+    service: DeadlineService = Depends(get_deadline_service),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> DeadlineEntryResponse:
     """
-    Update editable fields of a deadline.
+    Update editable fields of a user-owned deadline.
     """
-
-    entry = (
-        db.query(DeadlineEntry)
-        .filter(
-            DeadlineEntry.id == deadline_id,
-            DeadlineEntry.is_deleted.is_(False),
-        )
-        .first()
-    )
-
-    if entry is None:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Deadline {deadline_id} not found.",
-        )
-
-    updates = payload.model_dump(exclude_unset=True)
-
-    # Prevent updates to system-managed fields
-    protected_fields = {
-        "id",
-        "created_at",
-        "updated_at",
-    }
-
-    for field in protected_fields:
-        updates.pop(field, None)
-
-    for field, value in updates.items():
-        setattr(entry, field, value)
-
-    db.commit()
-    db.refresh(entry)
-
-    return entry
+    return service.update_deadline(db, deadline_id, payload, current_user.id)
 
 
-# SOFT DELETE
-
-@router.delete("/deadlines/{deadline_id}", status_code=204)
-async def delete_deadline(
+@router.delete("/deadlines/{deadline_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_deadline(
     deadline_id: int,
+    service: DeadlineService = Depends(get_deadline_service),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """
-    Soft delete a deadline.
+    Soft delete a user-owned deadline.
     """
-
-    entry = (
-        db.query(DeadlineEntry)
-        .filter(
-            DeadlineEntry.id == deadline_id,
-            DeadlineEntry.is_deleted.is_(False),
-        )
-        .first()
-    )
-
-    if entry is None:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Deadline {deadline_id} not found.",
-        )
-
-    entry.is_deleted = True
-
-    db.commit()
-
-    return
+    service.delete_deadline(db, deadline_id, current_user.id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
