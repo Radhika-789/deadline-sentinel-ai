@@ -1,3 +1,4 @@
+
 from datetime import datetime
 
 import pandas as pd
@@ -5,7 +6,16 @@ import streamlit as st
 import plotly.express as px
 import requests
 
-from api import get_deadlines, get_health, upload_file, get_deadline_calendar
+from api import (
+    AuthError,
+    get_deadlines,
+    get_health,
+    upload_file,
+    get_deadline_calendar,
+    signup,
+    login,
+    get_current_user,
+)
 
 # Initialize session state for notifications
 if "upload_success" not in st.session_state:
@@ -13,11 +23,116 @@ if "upload_success" not in st.session_state:
 if "upload_error" not in st.session_state:
     st.session_state.upload_error = None
 
+# Initialize session state for authentication
+if "access_token" not in st.session_state:
+    st.session_state.access_token = None
+if "user_email" not in st.session_state:
+    st.session_state.user_email = None
+if "auth_error" not in st.session_state:
+    st.session_state.auth_error = None
+
 st.set_page_config(
     page_title="Deadline Sentinel AI",
     page_icon="📅",
     layout="wide",
 )
+
+
+def _logout(message: str | None = None):
+    """Clear the session and send the user back to the login page."""
+    st.session_state.access_token = None
+    st.session_state.user_email = None
+    if message:
+        st.session_state.auth_error = message
+    st.rerun()
+
+
+def render_login_page():
+    """Login / signup screen shown whenever there is no valid JWT."""
+    st.title("📅 Deadline Sentinel AI")
+    st.caption("AI-powered placement & opportunity tracker")
+
+    if st.session_state.auth_error:
+        st.error(st.session_state.auth_error)
+        st.session_state.auth_error = None
+
+    login_tab, signup_tab = st.tabs(["🔐 Login", "🆕 Sign Up"])
+
+    with login_tab:
+        with st.form("login_form"):
+            email = st.text_input("Email", key="login_email")
+            password = st.text_input("Password", type="password", key="login_password")
+            submitted = st.form_submit_button("Log In", use_container_width=True)
+
+        if submitted:
+            if not email or not password:
+                st.error("Please enter both email and password.")
+            else:
+                try:
+                    token_data = login(email, password)
+                    st.session_state.access_token = token_data["access_token"]
+                    st.session_state.user_email = email
+                    st.rerun()
+                except requests.exceptions.HTTPError as e:
+                    detail = "Incorrect email or password."
+                    if e.response is not None:
+                        try:
+                            detail = e.response.json().get("detail", detail)
+                        except Exception:
+                            pass
+                    st.error(detail)
+                except requests.RequestException:
+                    st.error("Could not reach the backend. Is the API server running?")
+
+    with signup_tab:
+        with st.form("signup_form"):
+            new_username = st.text_input("Username (optional)", key="signup_username")
+            new_email = st.text_input("Email", key="signup_email")
+            new_password = st.text_input("Password", type="password", key="signup_password")
+            confirm_password = st.text_input(
+                "Confirm Password", type="password", key="signup_confirm_password"
+            )
+            st.caption("Password must be 8+ characters with an uppercase letter, a lowercase letter, and a number.")
+            submitted_signup = st.form_submit_button("Create Account", use_container_width=True)
+
+        if submitted_signup:
+            if not new_email or not new_password:
+                st.error("Please enter both email and password.")
+            elif new_password != confirm_password:
+                st.error("Passwords do not match.")
+            else:
+                try:
+                    signup(new_email, new_password, new_username or None)
+                    st.success("Account created! Please log in using the Login tab.")
+                except requests.exceptions.HTTPError as e:
+                    detail = "Could not create account."
+                    if e.response is not None:
+                        try:
+                            detail = e.response.json().get("detail", detail)
+                        except Exception:
+                            pass
+                    st.error(detail)
+                except requests.RequestException:
+                    st.error("Could not reach the backend. Is the API server running?")
+
+
+# --- Auth gate: block access to the dashboard until logged in ---------
+if not st.session_state.access_token:
+    render_login_page()
+    st.stop()
+
+# Validate the token is still good (e.g. hasn't expired) before showing
+# the dashboard, so a stale token doesn't silently break every widget.
+try:
+    _current_user = get_current_user(st.session_state.access_token)
+    st.session_state.user_email = _current_user.get("email", st.session_state.user_email)
+except AuthError:
+    _logout("Your session has expired. Please log in again.")
+except requests.RequestException:
+    st.error("Could not reach the backend. Is the API server running?")
+    st.stop()
+
+TOKEN = st.session_state.access_token
 
 st.title("📅 Deadline Sentinel AI")
 st.caption("AI-powered placement & opportunity tracker")
@@ -29,6 +144,12 @@ st.caption("AI-powered placement & opportunity tracker")
 with st.sidebar:
 
     st.title("Deadline Sentinel AI")
+
+    st.divider()
+
+    st.markdown(f"👤 **{st.session_state.user_email}**")
+    if st.button("🚪 Logout", use_container_width=True):
+        _logout()
 
     st.divider()
 
@@ -64,7 +185,7 @@ with st.sidebar:
                 status_text.text("Extracting and analyzing deadline data...")
                 progress_bar.progress(75)
                 
-                result = upload_file(uploaded_file)
+                result = upload_file(TOKEN, uploaded_file)
                 
                 progress_bar.progress(100)
                 status_text.text("Success!")
@@ -77,7 +198,12 @@ with st.sidebar:
                 progress_bar.empty()
                 status_text.empty()
                 st.rerun()
-                
+
+            except AuthError:
+                progress_bar.empty()
+                status_text.empty()
+                _logout("Your session has expired. Please log in again.")
+
             except Exception as e:
                 progress_bar.empty()
                 status_text.empty()
@@ -186,6 +312,7 @@ with st.spinner("Loading deadlines..."):
     try:
         # Fetch up to 100 deadlines to build accurate charts and timelines
         deadlines = get_deadlines(
+            TOKEN,
             company_name=company_name or None,
             category=category or None,
             status=status or None,
@@ -196,6 +323,8 @@ with st.spinner("Loading deadlines..."):
             sort_by=sort_by,
             order=order,
         )
+    except AuthError:
+        _logout("Your session has expired. Please log in again.")
     except Exception as e:
         st.error(f"Could not connect to backend.\n\n{e}")
         st.stop()
@@ -218,7 +347,12 @@ df["created_dt"] = pd.to_datetime(df["created_at"], format="mixed", errors="coer
 def days_remaining(deadline_val):
     if pd.isna(deadline_val):
         return "-"
-    return (deadline_val.date() - datetime.now().date()).days
+    delta = (deadline_val.date() - datetime.now().date()).days
+    if delta == 0:
+        return "Today"
+    if delta > 0:
+        return f"{delta} days"
+    return f"Expired {abs(delta)} days ago"
 
 df["Days Remaining"] = df["deadline_dt"].apply(days_remaining)
 
@@ -477,8 +611,10 @@ with st.expander("📅 Add to Calendar", expanded=False):
 
             if cols[3].button("📆 Generate .ics", key=f"cal_btn_{row_id}"):
                 try:
-                    ics_bytes, filename = get_deadline_calendar(row_id)
+                    ics_bytes, filename = get_deadline_calendar(TOKEN, row_id)
                     st.session_state[cache_key] = (ics_bytes, filename)
+                except AuthError:
+                    _logout("Your session has expired. Please log in again.")
                 except requests.exceptions.HTTPError as e:
                     if e.response is not None and e.response.status_code == 404:
                         st.error(f"'{row['company_name']}' deadline no longer exists.")

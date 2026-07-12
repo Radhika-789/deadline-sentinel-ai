@@ -6,8 +6,8 @@ scholarship, hackathon, or event).
 import enum
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, Enum, Float, Index, Integer, String, Text
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import Boolean, DateTime, Enum, Float, ForeignKey, Index, Integer, String, Text
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.session import Base
 
@@ -90,6 +90,12 @@ class DeadlineEntry(Base):
     reminder_sent_at: Mapped[datetime | None] = mapped_column(
         DateTime, nullable=True
     )
+
+    # Ownership link (Multi-tenancy)
+    user_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    owner: Mapped["User"] = relationship("User", back_populates="deadlines")
 
     # Soft delete flag. User-facing deletions should never hard-delete
     # rows — this lets us hide an entry from the dashboard while

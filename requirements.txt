@@ -12,3 +12,7 @@ python-multipart>=0.0.9
 Pillow>=10.3.0
 plotly>=5.22.0
 icalendar
+python-jose[cryptography]>=3.3.0
+passlib[bcrypt]>=1.7.4
+alembic==1.13.3
+email-validator>=2.0.0

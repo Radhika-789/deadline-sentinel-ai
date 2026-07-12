@@ -16,6 +16,16 @@ class Settings(BaseSettings):
     app_env: str = "development"
     log_level: str = "INFO"
 
+    # --- Auth / JWT -----------------------------------------------------
+    # Required, no default: a shared/default signing key would let
+    # anyone forge tokens. Must be set explicitly in .env.
+    jwt_secret_key: str
+    jwt_algorithm: str = "HS256"
+    jwt_access_token_expire_minutes: int = 1440  # 60 * 24  # 24 hours
+    
+    admin_email: str
+    admin_password: str
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
