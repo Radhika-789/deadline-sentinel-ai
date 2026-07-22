@@ -84,11 +84,14 @@ class DeadlineEntry(Base):
         Enum(DeadlineStatus), nullable=False, default=DeadlineStatus.UPCOMING
     )
 
-    # Tracks whether the reminder service has already notified the user
-    # for this entry, so APScheduler jobs don't send duplicate alerts.
-    # NULL = never sent; timestamp = when it was sent.
     reminder_sent_at: Mapped[datetime | None] = mapped_column(
         DateTime, nullable=True
+    )
+
+    # Token used by the scheduler to claim rows atomically, protecting
+    # against race conditions and concurrent double-emails.
+    claim_token: Mapped[str | None] = mapped_column(
+        String(255), nullable=True, index=True
     )
 
     # Ownership link (Multi-tenancy)

@@ -15,20 +15,57 @@ from app.models.deadline import DeadlineStatus, OpportunityCategory, SourceType
 _DATE_FORMATS = (
     "%Y-%m-%d",
     "%Y-%m-%dT%H:%M:%S",
+
     "%d-%m-%Y",
     "%d/%m/%Y",
+
     "%B %d, %Y",
+    "%b %d, %Y",
+
     "%d %B %Y",
+    "%d %b %Y",
+
+    "%d %B",
+    "%d %b",
+
+    "%B %d",
+    "%b %d",
 )
 
 
 def _parse_flexible_date(value: str) -> datetime:
     """Try multiple known formats before giving up on a date string."""
+
+    value = value.strip()
+
+    # Convert "18th" -> "18"
+    value = re.sub(
+        r"(\d+)(st|nd|rd|th)",
+        r"\1",
+        value,
+        flags=re.IGNORECASE,
+    )
+
+    # Remove words like EOD / end of day
+    value = re.sub(
+        r"\b(EOD|end of day)\b",
+        "",
+        value,
+        flags=re.IGNORECASE,
+    ).strip()
+
     for fmt in _DATE_FORMATS:
         try:
-            return datetime.strptime(value.strip(), fmt)
+            parsed = datetime.strptime(value, fmt)
+
+            if parsed.year == 1900:
+                parsed = parsed.replace(year=datetime.now().year)
+
+            return parsed
+
         except ValueError:
             continue
+        
     raise ValueError(
         f"Could not parse deadline date: {value!r}. "
         f"Expected a format like 'YYYY-MM-DD' or 'Month DD, YYYY'."

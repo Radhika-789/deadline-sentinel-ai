@@ -8,6 +8,7 @@ lives in services; all route definitions live in app/api/.
 
 import logging
 
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -27,6 +28,19 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: Start background scheduler
+    logger.info("Initializing background scheduler on startup.")
+    from app.services.scheduler import start_scheduler, shutdown_scheduler
+    start_scheduler()
+    yield
+    # Shutdown: Stop the background scheduler cleanly
+    logger.info("Shutting down background scheduler on shutdown.")
+    shutdown_scheduler()
+
+
 app = FastAPI(
     title="Deadline Sentinel AI",
     description=(
@@ -37,6 +51,7 @@ app = FastAPI(
     version="0.1.0",
     docs_url="/docs",
     redoc_url="/redoc",
+    lifespan=lifespan,
 )
 
 app.include_router(api_router)
@@ -47,15 +62,31 @@ app.include_router(api_router)
 # guarantees every endpoint returns a consistent error shape, and adding
 # a new endpoint automatically inherits correct error handling for free.
 
-@app.exception_handler(RequestValidationError)
-async def request_validation_handler(
-    request: Request, exc: RequestValidationError
+@app.exception_handler(SchemaValidationError)
+async def schema_validation_handler(
+    request: Request, exc: SchemaValidationError
 ) -> JSONResponse:
-    """Malformed request bodies (e.g. missing/short 'text' field) -> 400."""
-    logger.warning("Request validation failed: %s", exc.errors())
+    logger.warning("Extraction schema validation failed: %s", exc)
+
+    safe_errors = []
+
+    for error in exc.raw_errors:
+        safe_error = error.copy()
+
+        if "ctx" in safe_error:
+            safe_error["ctx"] = {
+                k: str(v)
+                for k, v in safe_error["ctx"].items()
+            }
+
+        safe_errors.append(safe_error)
+
     return JSONResponse(
         status_code=400,
-        content={"detail": "Invalid request.", "errors": exc.errors()},
+        content={
+            "detail": str(exc),
+            "errors": safe_errors,
+        },
     )
 
 
@@ -64,17 +95,6 @@ async def empty_response_handler(request: Request, exc: EmptyResponseError) -> J
     """Empty input text or empty Gemini output -> 400 (caller's input problem)."""
     logger.warning("Empty response/input: %s", exc)
     return JSONResponse(status_code=400, content={"detail": str(exc)})
-
-
-@app.exception_handler(SchemaValidationError)
-async def schema_validation_handler(
-    request: Request, exc: SchemaValidationError
-) -> JSONResponse:
-    """Gemini's extracted data didn't match our schema -> 400."""
-    logger.warning("Extraction schema validation failed: %s", exc)
-    return JSONResponse(
-        status_code=400, content={"detail": str(exc), "errors": exc.raw_errors}
-    )
 
 
 @app.exception_handler(GeminiAPIError)

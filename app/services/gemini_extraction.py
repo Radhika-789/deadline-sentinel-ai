@@ -46,8 +46,10 @@ JSON schema to follow exactly:
   "role": string or null (job title / internship role, if applicable),
   "eligible_branches": string or null (e.g. "CSE, ECE, IT"),
   "cgpa_criteria": string or null (e.g. "7.0 and above"),
-  "deadline": string (required, the application deadline date, in "YYYY-MM-DD" \
-format if determinable, otherwise as written in the source),
+   "deadline": string (required, the application deadline date in YYYY-MM-DD \
+format. If the year is missing, assume the current year. Ignore terms like \
+"EOD", "End of Day", "11:59 PM", and "Midnight". If an exact calendar date \
+cannot be determined, return null),
   "registration_link": string or null (application/registration URL),
   "important_instructions": string or null (any special instructions, \
 documents required, or notes),

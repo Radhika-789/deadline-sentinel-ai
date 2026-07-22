@@ -26,6 +26,18 @@ class Settings(BaseSettings):
     admin_email: str
     admin_password: str
 
+    # --- SMTP / Email Settings ------------------------------------------
+    smtp_host: str = "localhost"
+    smtp_port: int = 1025
+    smtp_username: str | None = None
+    smtp_password: str | None = None
+    smtp_from_email: str = "noreply@deadlinesentinel.ai"
+
+    # --- Scheduler / Reminder Settings -----------------------------------
+    # Made configurable in minutes as requested by the user
+    reminder_interval_minutes: int = 60
+    reminder_threshold_hours: int = 24
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
