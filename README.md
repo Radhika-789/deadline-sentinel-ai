@@ -1,64 +1,120 @@
 # 🚀 Deadline Sentinel AI
 
-An AI-powered deadline management platform that automatically extracts important opportunity details from unstructured content such as PDFs, images, screenshots, and plain text. Instead of manually tracking placement drives, internships, hackathons, or scholarships, students can upload the announcement and let AI organize everything into a searchable dashboard.
+An AI-powered opportunity tracking platform that automatically extracts important deadlines and application details from unstructured documents such as PDFs, images, screenshots, DOCX files, and plain text. Instead of manually tracking internships, placements, hackathons, scholarships, and competitions, users can upload an announcement and let AI organize everything into a searchable dashboard with automated reminders.
 
-The system uses Google Gemini for intelligent information extraction and provides a centralized dashboard to monitor deadlines, application status, and upcoming opportunities.
+Deadline Sentinel AI combines **Google Gemini**, **FastAPI**, and **Streamlit** to provide intelligent extraction, secure user management, and proactive deadline tracking.
 
 ---
 
-## ✨ Features
+# ✨ Features
 
-### 🤖 AI-Powered Extraction
-- Extracts structured information from raw text using Google Gemini
-- Supports placement drives, internships, hackathons, scholarships, competitions, and more
-- Automatically identifies:
+## 🤖 AI-Powered Information Extraction
+
+- Extracts structured information using Google Gemini
+- Supports:
+  - Internships
+  - Placement drives
+  - Hackathons
+  - Scholarships
+  - Competitions
+  - Fellowships
+- Automatically extracts:
   - Company / Organization
-  - Role
+  - Role / Opportunity
   - Category
   - Deadline
   - Eligibility
   - Application Link
   - Additional Notes
 
-### 📂 Multi-format Upload
-Upload announcements directly from:
+---
+
+## 📂 Multi-format Upload
+
+Upload announcements from:
+
 - PDF
 - DOCX
 - TXT
 - PNG
 - JPG / JPEG
 
-Images are processed using Gemini OCR before information extraction.
+Images are processed using Gemini Vision before structured extraction.
 
-### 📊 Interactive Dashboard
+---
+
+## 🔐 Authentication & Multi-Tenancy
+
+- JWT Authentication
+- Secure password hashing
+- User registration & login
+- Protected APIs
+- User-specific deadline management
+- Multi-tenant architecture ensuring data isolation
+
+---
+
+## 📧 Automated Email Reminder Engine
+
+Never miss an important deadline.
+
+Features include:
+
+- APScheduler-based background scheduler
+- Configurable reminder intervals
+- SMTP email integration
+- UUID-based claim locking
+- Lease-based crash recovery
+- Duplicate reminder prevention
+- Automatic retry after failed email delivery
+
+---
+
+## 📊 Interactive Dashboard
+
 Built with Streamlit.
 
 Includes:
+
 - Dashboard overview
-- Deadline statistics
+- Upload interface
+- Opportunity statistics
 - Upcoming vs Expired opportunities
-- Search & filtering
+- Search
+- Filtering
 - Sorting
 - Pagination
-- Upload interface
-- Responsive data table
+- Recent uploads
+- User-specific dashboards
 
-### ⚙️ Backend API
-REST APIs built with FastAPI.
+---
 
-Implemented endpoints include:
-- Extract opportunity from text
+## ⚙️ REST API
+
+FastAPI-powered REST APIs.
+
+Includes:
+
+- User Authentication
 - Upload files
-- View all deadlines
-- View individual deadline
-- Update deadline
-- Soft delete deadline
-- Filtering, sorting and pagination
+- AI extraction
+- Create deadlines
+- Retrieve deadlines
+- Update deadlines
+- Soft delete
+- Filtering
+- Sorting
+- Pagination
+- Health endpoint
 
-### 💾 Database
+---
+
+## 💾 Database
+
 - SQLAlchemy ORM
-- SQLite (development)
-- PostgreSQL ready
+- Alembic migrations
+- SQLite (Development)
+- PostgreSQL-ready
 
 ---
 
@@ -67,11 +123,15 @@ Implemented endpoints include:
 | Layer | Technology |
 |--------|------------|
 | Backend | FastAPI |
+| Frontend | Streamlit |
 | AI | Google Gemini API |
 | Database | SQLite + SQLAlchemy |
-| Frontend | Streamlit |
+| ORM | SQLAlchemy |
+| Authentication | JWT |
+| Scheduler | APScheduler |
+| Migrations | Alembic |
 | OCR | Gemini Vision |
-| Scheduling | APScheduler |
+| Email | SMTP |
 | Language | Python 3.11+ |
 
 ---
@@ -81,6 +141,7 @@ Implemented endpoints include:
 ```text
 deadline-sentinel-ai/
 │
+├── alembic/
 ├── app/
 │   ├── api/
 │   ├── core/
@@ -88,28 +149,30 @@ deadline-sentinel-ai/
 │   ├── models/
 │   ├── schemas/
 │   ├── services/
+│   ├── auth/
 │   └── main.py
 │
 ├── streamlit_app/
-│
+├── tests/
 ├── requirements.txt
-├── README.md
-└── .env.example
+├── .env.example
+└── README.md
 ```
 
 ---
 
 # ⚡ Getting Started
 
-## 1. Clone the repository
+## 1. Clone Repository
 
 ```bash
 git clone https://github.com/Radhika-789/deadline-sentinel-ai.git
-
 cd deadline-sentinel-ai
 ```
 
-## 2. Create a virtual environment
+---
+
+## 2. Create Virtual Environment
 
 ```bash
 python -m venv venv
@@ -121,45 +184,56 @@ Windows
 venv\Scripts\activate
 ```
 
-Linux / macOS
+Linux/macOS
 
 ```bash
 source venv/bin/activate
 ```
 
-## 3. Install dependencies
+---
+
+## 3. Install Dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-## 4. Configure environment variables
+---
+
+## 4. Configure Environment Variables
 
 Create a `.env` file.
 
 ```env
-GEMINI_API_KEY=your_api_key_here
+GEMINI_API_KEY=your_api_key
+JWT_SECRET_KEY=your_secret_key
+
+DATABASE_URL=sqlite:///./deadline_sentinel.db
+
+SMTP_HOST=localhost
+SMTP_PORT=1025
+
+REMINDER_INTERVAL_MINUTES=60
+REMINDER_THRESHOLD_HOURS=24
 ```
 
-## 5. Start FastAPI
+---
+
+## 5. Run Backend
 
 ```bash
 uvicorn app.main:app --reload
 ```
 
-Backend:
-
-```
-http://127.0.0.1:8000
-```
-
-Swagger:
+Swagger UI:
 
 ```
 http://127.0.0.1:8000/docs
 ```
 
-## 6. Start Streamlit
+---
+
+## 6. Run Streamlit
 
 ```bash
 streamlit run streamlit_app/app.py
@@ -167,27 +241,31 @@ streamlit run streamlit_app/app.py
 
 ---
 
-
 # 🚧 Roadmap
 
-- [x] AI deadline extraction
-- [x] CRUD APIs
-- [x] File upload support
-- [x] OCR for images
-- [x] Interactive dashboard
-- [x] Filtering & pagination
-- [ ] Email reminders
-- [ ] Authentication
-- [ ] Calendar integration
-- [ ] Docker deployment
+- ✅ AI-powered deadline extraction
+- ✅ Multi-format document upload
+- ✅ Gemini Vision OCR
+- ✅ Authentication & JWT authorization
+- ✅ Multi-tenant architecture
+- ✅ CRUD APIs
+- ✅ Interactive dashboard
+- ✅ Filtering, sorting & pagination
+- ✅ Automated email reminder engine
+- ✅ APScheduler background jobs
+- ✅ Alembic database migrations
+- ⏳ Google Calendar integration
+- ⏳ Manual deadline entry
+- ⏳ Docker deployment
+- ⏳ CI/CD pipeline
 
 ---
 
 # 💡 Motivation
 
-Students often receive opportunity announcements through WhatsApp groups, emails, LinkedIn posts, or PDF notices. Important deadlines can easily get buried or forgotten.
+Students receive opportunities through WhatsApp groups, emails, LinkedIn posts, college portals, and PDFs. Important deadlines often get buried across multiple platforms.
 
-Deadline Sentinel AI was built to reduce that manual effort by automatically extracting and organizing opportunity details into a single dashboard, helping students focus on applying rather than managing deadlines.
+Deadline Sentinel AI automatically extracts, organizes, and tracks these opportunities while proactively reminding users before deadlines—helping them focus on applying instead of manually managing dates.
 
 ---
 
